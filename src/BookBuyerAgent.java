@@ -3,8 +3,6 @@ import jade.core.AID;
 import jade.core.behaviours.*;
 import jade.lang.acl.*;
 
-import java.io.IOException;
-
 public class BookBuyerAgent extends Agent {
 
     private String targetBookTitle;
@@ -16,7 +14,7 @@ public class BookBuyerAgent extends Agent {
     protected void setup() {
         //doWait(2000);
 
-        System.out.println("Witam! Agent-kupiec " + getAID().getName() + " (wersja c lato, 2019/20) jest gotow!");
+        System.out.println("Witam!  Agent-kupiec " + getAID().getName() + " (wersja c lato, 2019/20) jest gotow!");
 
         Object[] args = getArguments(); // pobranie argumentów wejściowych - tytułów książek
 
@@ -32,7 +30,7 @@ public class BookBuyerAgent extends Agent {
     }
 
     protected void takeDown() {
-        System.out.println("Agent-kupiec " + getAID().getName() + " konczy istnienie.");
+        System.out.println(" Agent-kupiec " + getAID().getName() + " konczy istnienie.");
     }
 
 
@@ -44,10 +42,11 @@ public class BookBuyerAgent extends Agent {
     private class RequestPerformer extends Behaviour {
         final int BuyProposalSendingStep = 0;
         final int ReceiveResponsesStep = 1;
-        final int NegotiateStep = 2;
-        final int SendOfferToBestSellerStep = 3;
-        final int ReceiveBuyOfferResponseStep = 4;
-        final int OutOfBusiness = 5;
+        final int FirstOfferStep = 2;
+        final int NegotiateStep = 3;
+        final int SendOfferToBestSellerStep = 4;
+        final int ReceiveBuyOfferResponseStep = 5;
+        final int OutOfBusiness = 6;
 
         private AID bestSeller;     // agent sprzedający z najkorzystniejszą ofertą
         private int bestPrice;      // najlepsza cena
@@ -55,12 +54,14 @@ public class BookBuyerAgent extends Agent {
         private MessageTemplate mt; // szablon odpowiedzi
         private int step = 0;       // krok
 
-        private int negotiationCounter = 0;
+
+        int proposalCounter = 0;
+        double lastOffer = 0;
 
         public void action() {
             switch (step) {
-                case BuyProposalSendingStep:
-                    System.out.print(" Oferta kupna (CFP) jest wysylana do: ");
+                case BuyProposalSendingStep: {
+                    System.out.print(" Agent-kupiec" + getAID().getName() + " Oferta kupna (CFP) jest wysylana do: ");
                     for (AID agent : sellerAgents) {
                         System.out.print(agent + " ");
                     }
@@ -81,7 +82,8 @@ public class BookBuyerAgent extends Agent {
                             MessageTemplate.MatchInReplyTo(cfp.getReplyWith()));
                     step = ReceiveResponsesStep;     // przejście do kolejnego kroku
                     break;
-                case ReceiveResponsesStep:
+                }
+                case ReceiveResponsesStep: {
                     ACLMessage reply = myAgent.receive(mt);
                     if (reply != null) {
                         if (reply.getPerformative() == ACLMessage.PROPOSE) {
@@ -92,72 +94,89 @@ public class BookBuyerAgent extends Agent {
                             }
                         }
                         if (++repliesCnt >= sellerAgents.length) {
-                            step = NegotiateStep;
+                            step = FirstOfferStep;
                         }
                     } else {
                         block();
                     }
                     break;
+                }
 
-                case NegotiateStep:
-                    final int proposalCount = 6;
+                case FirstOfferStep: {
+                    ACLMessage firstOffer = new ACLMessage(ACLMessage.PROPOSE);
+                    firstOffer.addReceiver(bestSeller);
+                    firstOffer.setConversationId(targetBookTitle);
+                    double offer = bestPrice * 0.4;
+                    lastOffer = offer;
+                    firstOffer.setReplyWith("offer" + System.currentTimeMillis());
+                    mt = MessageTemplate.and(MessageTemplate.MatchConversationId(firstOffer.getConversationId()),
+                            MessageTemplate.MatchReplyWith(firstOffer.getReplyWith()));
+                    firstOffer.setContent(String.valueOf(offer));
+                    System.out.println(" Agent-kupiec" + getAID().getName() + " po raz pierwszy proponuje: " + offer);
+                    myAgent.send(firstOffer);
+                    step = NegotiateStep;
+                    block();
+                }
+
+                case NegotiateStep: {
+                    final int proposalLimit = 6;
                     final int acceptanceThreshold = 3;
                     final int incrementSize = 6;
 
-                    double currentPrice = 0;
+                    ACLMessage response = myAgent.receive(mt);
 
-                    ACLMessage priceProposal = new ACLMessage(ACLMessage.REFUSE);
-                    priceProposal.addReceiver(bestSeller);
-                    currentPrice = negotiationCounter == 0 ? bestPrice * 0.6 : currentPrice + incrementSize;
-
-                    try {
-                        priceProposal.setContentObject(new SellerOffer(targetBookTitle, currentPrice));
-                    } catch (IOException e) {
-                        e.printStackTrace();
+                    if (response == null) {
+                        break;
                     }
 
-                    System.out.println("The buying agent is not satisfied with current price");
-                    System.out.println("\t trying for the: " + negotiationCounter + " time");
-                    System.out.println("\t sending offer: " + currentPrice);
-                    myAgent.send(priceProposal);
-
-                    ACLMessage response = myAgent.receive(mt);
-                    if (response != null && response.getPerformative() == ACLMessage.INFORM) {
-                        int offer = Integer.parseInt(response.getContent());
-                        System.out.println("Buyer received counter offer from seller with value: " + offer);
-                        if (offer - currentPrice <= acceptanceThreshold) {
-                            System.out.println("Negotiation succeeded with price" + currentPrice);
-                            step = SendOfferToBestSellerStep;
+                    double counterOffer = Double.parseDouble(response.getContent());
+                    boolean negotiationSucceeded = counterOffer - lastOffer < acceptanceThreshold;
+                    if (negotiationSucceeded) {
+                        System.out.println(" Agent-kupiec" + getAID().getName() + " Udalo sie wynegocjowac cene" + lastOffer);
+                        step = SendOfferToBestSellerStep;
+                        break;
+                    } else {
+                        proposalCounter++;
+                        if (proposalCounter >= proposalLimit) {
+                            System.out.println(
+                                    " Agent-kupiec" + getAID().getName() + " Nie udalo sie wynegocjowac akceptowalnej ceny, ostatnia: " + lastOffer);
+                            step = OutOfBusiness;
                             break;
                         }
-
-                        if (negotiationCounter == proposalCount) {
-                            System.out.println("The buying agent failed to negotiate satisfying price, end.");
-                            step = OutOfBusiness;
-                            return;
-                        }
                     }
 
-                    negotiationCounter += 1;
+                    double offer = lastOffer + incrementSize;
+                    lastOffer = offer;
+                    ACLMessage nextOffer = response.createReply();
+                    mt = MessageTemplate.and(MessageTemplate.MatchConversationId(nextOffer.getConversationId()),
+                            MessageTemplate.MatchReplyWith(nextOffer.getReplyWith()));
+                    nextOffer.setContent(String.valueOf(offer));
+                    nextOffer.setPerformative(ACLMessage.PROPOSE);
+                    System.out.println(" Agent-kupiec" + getAID().getName() + " proponuje: " + offer + "po raz: " + proposalCounter);
+                    myAgent.send(nextOffer);
                     block();
                     break;
+                }
 
-                case SendOfferToBestSellerStep:      // wys�anie zam�wienia do sprzedawcy, kt�ry z�o�y� najlepsz� ofert�
+                case SendOfferToBestSellerStep: {
                     ACLMessage order = new ACLMessage(ACLMessage.ACCEPT_PROPOSAL);
                     order.addReceiver(bestSeller);
                     order.setContent(targetBookTitle);
-                    order.setConversationId("book-trade");
                     order.setReplyWith("order" + System.currentTimeMillis());
                     myAgent.send(order);
                     mt = MessageTemplate.and(MessageTemplate.MatchConversationId("book-trade"),
                             MessageTemplate.MatchInReplyTo(order.getReplyWith()));
                     step = ReceiveBuyOfferResponseStep;
+                    block();
                     break;
-                case ReceiveBuyOfferResponseStep:
-                    reply = myAgent.receive(mt);
+                }
+
+                case ReceiveBuyOfferResponseStep: {
+                    mt = MessageTemplate.MatchPerformative(ACLMessage.ACCEPT_PROPOSAL);
+                    ACLMessage reply = myAgent.receive(mt);
                     if (reply != null) {
                         if (reply.getPerformative() == ACLMessage.INFORM) {
-                            System.out.println("Tytul " + targetBookTitle + " został zamowiony.");
+                            System.out.println(" Agent-kupiec" + getAID().getName() + " Tytul " + targetBookTitle + " został zamowiony.");
                             System.out.println("Cena = " + bestPrice);
                             myAgent.doDelete();
                         }
@@ -166,11 +185,16 @@ public class BookBuyerAgent extends Agent {
                         block();
                     }
                     break;
+                }
             }
         }
 
         public boolean done() {
-            return ((step == SendOfferToBestSellerStep && bestSeller == null) || step == OutOfBusiness);
+            boolean isDone = (step == SendOfferToBestSellerStep && bestSeller == null) || step == OutOfBusiness;
+            if (isDone) {
+                System.out.println(myAgent.getName() + "is done with this business");
+            }
+            return isDone;
         }
     }
 }

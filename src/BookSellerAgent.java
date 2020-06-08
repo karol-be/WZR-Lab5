@@ -2,7 +2,6 @@ import jade.core.Agent;
 import jade.core.behaviours.*;
 import jade.lang.acl.*;
 
-import java.io.Serializable;
 import java.util.*;
 import java.lang.*;
 
@@ -46,27 +45,34 @@ public class BookSellerAgent extends Agent {
      * sent back.
      */
     class OfferRequestsServer extends CyclicBehaviour {
+
+        MessageTemplate mt;
+
         public void action() {
             // Tworzenie szablonu wiadomoci
-            MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.CFP);
+            mt = MessageTemplate.MatchPerformative(ACLMessage.CFP);
             // Próba odbioru wiadomoci zgodnej z szablonem:
             ACLMessage msg = myAgent.receive(mt);
 
             if (msg != null) {
                 String title = msg.getContent();  // odczytanie tytułu
 
-                System.out.println("Agent-sprzedawca " + getAID().getName() + " otrzymal wiadomosc: " + title);
-                ACLMessage reply = msg.createReply();
-                Integer price = catalogue.get(title);
-                if (price != null) {
-                    reply.setPerformative(ACLMessage.PROPOSE);
-                    reply.setContent(String.valueOf(price.intValue()));
-                    System.out.println("Agent-sprzedawca " + getAID().getName() + " odpowiada: " + price);
-                } else {
-                    reply.setPerformative(ACLMessage.REFUSE);
-                    reply.setContent("Tytul jest niedostepny");
+                System.out.println("Agent-sprzedawca " + getAID().getName() + " otrzymal prosbe o cene: " + title);
+                // tworzenie i wysylanie odpowiedzi
+                {
+                    ACLMessage reply = msg.createReply();
+                    Integer price = catalogue.get(title);
+                    if (price != null) {
+                        reply.setPerformative(ACLMessage.PROPOSE);
+                        reply.setContent(String.valueOf(price.intValue()));
+
+                        System.out.println("Agent-sprzedawca " + getAID().getName() + " odpowiada: " + price);
+                    } else {
+                        reply.setPerformative(ACLMessage.REFUSE);
+                        reply.setContent("Agent-sprzedawca (wersja c lato,2019/20) " + getAID().getName() + "Tytul jest niedostepny");
+                    }
+                    myAgent.send(reply);
                 }
-                myAgent.send(reply);
             } else {
                 block(); // blokowanie do czsau nadejścia nowej wiadomości
             }
@@ -74,42 +80,47 @@ public class BookSellerAgent extends Agent {
     }
 
     class PurchaseOrdersServer extends CyclicBehaviour {
-        private double lastOffer = 0;
+        Map<String, Double> buyersLastOffers = new HashMap<>();
+
+        private String replyWith;
+        MessageTemplate mt = MessageTemplate.or(
+                MessageTemplate.MatchPerformative(ACLMessage.PROPOSE),
+                MessageTemplate.MatchPerformative(ACLMessage.ACCEPT_PROPOSAL));
 
         public void action() {
-            ACLMessage msg = myAgent.receive();
+            ACLMessage msg = myAgent.receive(mt);
 
-            // client has accepted our offer?
             if ((msg != null)) {
+                // jesli klient zgodzil sie na nasza propozycje
                 if (msg.getPerformative() == ACLMessage.ACCEPT_PROPOSAL) {
                     ACLMessage reply = msg.createReply();
                     String title = msg.getContent();
-                    reply.setPerformative(ACLMessage.INFORM);
-                    System.out.println("Agent-sprzedawca (wersja c lato,2019/20) " + getAID().getName() + " sprzedal ksiazke o tytule: " + title);
+                    reply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
+                    System.out.println(
+                            "Agent-sprzedawca (wersja c lato,2019/20) " + getAID().getName() + " sprzedal ksiazke o tytule: " + title);
                     myAgent.send(reply);
-                }
-                else if (msg.getPerformative() == ACLMessage.REFUSE) {
-                    double newOffer;
+                } else { // Kupiec zlozyl kontroferte
+                    String title = msg.getConversationId();
+                    double theirOffer = Double.parseDouble(msg.getContent());
 
-                    SellerOffer offer;
-                    try {
-                        offer = (SellerOffer)msg.getContentObject();
-                    } catch (UnreadableException e) {
-                        e.printStackTrace();
-                        return;
-                    }
+                    String key = msg.getSender().getName() + title;
 
-                    newOffer = lastOffer == 0
-                            ? (catalogue.get(offer.Title) + offer.Price) / 2
-                            : (lastOffer + offer.Price) / 2;
+                    boolean isFirstOffer = !buyersLastOffers.containsKey(key);
+                    double offer = isFirstOffer
+                            ? (catalogue.get(title) + theirOffer) / 2
+                            : (buyersLastOffers.get(msg.getSender().getName() + title) + theirOffer) / 2;
 
-                    lastOffer = newOffer;
-
-                    ACLMessage response = new ACLMessage(ACLMessage.INFORM);
-                    response.setContent(String.valueOf(newOffer));
+                    ACLMessage response = msg.createReply();
+                    response.setReplyWith(msg.getReplyWith());
+                    response.setContent(String.valueOf(offer));
                     myAgent.send(response);
-                    System.out.println("Seller responded with counter offer of value: " + newOffer);
+                    // zapisywanie wyslanej propozycji
+                    buyersLastOffers.put(key, offer);
+
+                    System.out.println("Agent-sprzedawca (wersja c lato,2019/20) "
+                            + getAID().getName() + "Zaproponowal nowa cene: " + offer);
                 }
+                block();
             }
         }
     }
